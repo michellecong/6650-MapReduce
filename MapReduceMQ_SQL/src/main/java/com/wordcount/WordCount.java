@@ -121,9 +121,9 @@ public class WordCount {
 
       dataSource = new HikariDataSource(hikariConfig);
 
-      // Test connection
-      try (Connection conn = dataSource.getConnection()) {
-        if (!((Connection) conn).isValid(5)) {
+      // Test connection - using fully qualified type to avoid ambiguity
+      try (java.sql.Connection conn = dataSource.getConnection()) {
+        if (!conn.isValid(5)) {  // Removed unnecessary cast
           System.err.println("Database connection test failed. Please check your database configuration.");
         } else {
           System.out.println("Database connection established successfully.");
@@ -141,7 +141,7 @@ public class WordCount {
     if (dataSource == null) {
       throw new SQLException("Database connection pool is not initialized.");
     }
-    Connection conn = dataSource.getConnection();
+    java.sql.Connection conn = dataSource.getConnection();
     if (conn == null) {
       throw new SQLException("Failed to get a connection from the pool.");
     }
@@ -287,7 +287,7 @@ public class WordCount {
         wordCounts.remove(key);
       }
 
-      Connection conn = null;
+      java.sql.Connection conn = null;
       try {
         conn = getConnection();
         conn.setAutoCommit(false);
@@ -410,6 +410,7 @@ public class WordCount {
           info.put("processedLines", rs.getInt("processed_lines"));
           info.put("mapPhaseComplete", rs.getBoolean("map_phase_complete"));
           info.put("status", rs.getString("status"));
+          System.out.println("Task " + taskId + " info retrieved successfully");
         } else {
           System.err.println("Warning: Task " + taskId + " not found in database");
         }
@@ -455,7 +456,9 @@ public class WordCount {
       // Declare multiple Reduce queue shards
       for (int i = 0; i < REDUCE_SHARDS; i++) {
         channel.queueDeclare(REDUCE_QUEUE + "." + i, true, false, false, null);
+        System.out.println(" [*] Map Worker " + workerId + " declared queue " + REDUCE_QUEUE + "." + i);
       }
+
 
       System.out.println(" [*] Map Worker " + workerId + " waiting for messages");
 
@@ -530,7 +533,7 @@ public class WordCount {
               return;
             }
 
-            int processedLines = (int) taskInfo.get("processedLines") + currentCount;
+            int processedLines = (int) taskInfo.get("processedLines");
             int totalLines = (int) taskInfo.get("totalLines");
 
             if (processedLines >= totalLines && checkAndMarkMapPhaseComplete(taskId)) {
@@ -1206,31 +1209,16 @@ public class WordCount {
     }
   }
   public static void testQueue(ConnectionFactory factory) throws Exception {
-    // 注意这里使用了 RabbitMQ 的连接，而不是数据库连接
-    com.rabbitmq.client.Connection connection = null;
-    Channel channel = null;
+    try (com.rabbitmq.client.Connection connection = factory.newConnection();
+         Channel channel = connection.createChannel()) {
 
-    try {
-      connection = factory.newConnection();
-      channel = connection.createChannel();
-
-      // 确保队列存在
+      // Ensure queue exists
       channel.queueDeclare(MAP_QUEUE, true, false, false, null);
 
-      // 发送简单消息，不使用复杂的头部
+      // Send simple message without complex headers
       String message = "TEST_MESSAGE";
       channel.basicPublish("", MAP_QUEUE, null, message.getBytes(StandardCharsets.UTF_8));
       System.out.println(" [x] Sent test message: " + message);
-
-      // 等待一下，确保消息发送完成
-      Thread.sleep(1000);
-    } finally {
-      if (channel != null && channel.isOpen()) {
-        channel.close();
-      }
-      if (connection != null && connection.isOpen()) {
-        connection.close();
-      }
     }
   }
   public static void main(String[] args) {
