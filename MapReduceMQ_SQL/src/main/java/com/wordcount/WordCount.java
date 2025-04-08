@@ -11,66 +11,126 @@ import java.util.*;
 import java.util.concurrent.*;
 
 public class WordCount {
-  private static final String MAP_QUEUE = "map_queue";
-  private static final String REDUCE_QUEUE = "reduce_queue";
-  private static final String RESULT_QUEUE = "result_queue";
-  private static final String MAP_COMPLETE_QUEUE = "map_complete_queue";
-  private static final String DB_URL = "jdbc:mysql://localhost:3306/wordcount";
-  private static final String DB_USER = "user";
-  private static final String DB_PASSWORD = "password";
+  // Queue names
+  private static String MAP_QUEUE;
+  private static String REDUCE_QUEUE;
+  private static String RESULT_QUEUE;
+  private static String MAP_COMPLETE_QUEUE;
+  
+  // Database configuration
+  private static String DB_URL;
+  private static String DB_USER;
+  private static String DB_PASSWORD;
 
-  // constants for batch processing
-  private static final int PROGRESS_UPDATE_BATCH = 100; // update progess every 100 lines
-  private static final int WORD_COUNT_BATCH_SIZE = 1000; // batch size for word count
-  private static final int DB_BATCH_SIZE = 500; // batch size for DB operations
+  // Batch size constants
+  private static int PROGRESS_UPDATE_BATCH; // How many rows to process before updating progress
+  private static int WORD_COUNT_BATCH_SIZE; // How many words to accumulate before saving
+  private static int DB_BATCH_SIZE; // Database batch size
+  private static int REDUCE_SHARDS; // Number of Reduce shards
 
-  // db connection pool
+  // Connection pool
   private static HikariDataSource dataSource;
 
-  // initialize db connection pool
-  static {
-    HikariConfig config = new HikariConfig();
-    config.setJdbcUrl(DB_URL);
-    config.setUsername(DB_USER);
-    config.setPassword(DB_PASSWORD);
-    config.setMaximumPoolSize(10);
-    config.setMinimumIdle(5);
-    config.setIdleTimeout(30000);
-    config.setMaxLifetime(1800000);
-    config.setConnectionTimeout(30000);
-    config.addDataSourceProperty("cachePrepStmts", "true");
-    config.addDataSourceProperty("prepStmtCacheSize", "250");
-    config.addDataSourceProperty("prepStmtCacheSqlLimit", "2048");
+  // Configuration object
+  private static Properties config = new Properties();
 
-    dataSource = new HikariDataSource(config);
+  // Load configuration
+  static {
+    // Try to load configuration from path specified on command line
+    String configPath = System.getProperty("config.path", "config.properties");
+    
+    try (InputStream input = new FileInputStream(configPath)) {
+      config.load(input);
+      System.out.println("Loaded configuration from: " + configPath);
+      
+      // Initialize queue names
+      MAP_QUEUE = config.getProperty("queue.map", "map_queue");
+      REDUCE_QUEUE = config.getProperty("queue.reduce", "reduce_queue");
+      RESULT_QUEUE = config.getProperty("queue.result", "result_queue");
+      MAP_COMPLETE_QUEUE = config.getProperty("queue.map_complete", "map_complete_queue");
+      
+      // Initialize database configuration
+      DB_URL = config.getProperty("db.url", "jdbc:mysql://localhost:3306/wordcount");
+      DB_USER = config.getProperty("db.user", "user");
+      DB_PASSWORD = config.getProperty("db.password", "password");
+      
+      // Initialize batch processing configuration
+      PROGRESS_UPDATE_BATCH = Integer.parseInt(config.getProperty("batch.progress_update", "100"));
+      WORD_COUNT_BATCH_SIZE = Integer.parseInt(config.getProperty("batch.word_count", "1000"));
+      DB_BATCH_SIZE = Integer.parseInt(config.getProperty("batch.db_size", "500"));
+      REDUCE_SHARDS = Integer.parseInt(config.getProperty("reduce.shards", "10"));
+      
+      // Initialize connection pool
+      initDataSource();
+      
+    } catch (IOException e) {
+      System.out.println("Warning: Could not load configuration file: " + configPath);
+      System.out.println("Using default values");
+      
+      // Use default values
+      MAP_QUEUE = "map_queue";
+      REDUCE_QUEUE = "reduce_queue";
+      RESULT_QUEUE = "result_queue";
+      MAP_COMPLETE_QUEUE = "map_complete_queue";
+      
+      DB_URL = "jdbc:mysql://localhost:3306/wordcount";
+      DB_USER = "user";
+      DB_PASSWORD = "password";
+      
+      PROGRESS_UPDATE_BATCH = 100;
+      WORD_COUNT_BATCH_SIZE = 1000;
+      DB_BATCH_SIZE = 500;
+      REDUCE_SHARDS = 10;
+      
+      // Initialize connection pool
+      initDataSource();
+    }
   }
 
-  // get a connection from the pool
+  // Initialize data source
+  private static void initDataSource() {
+    HikariConfig hikariConfig = new HikariConfig();
+    hikariConfig.setJdbcUrl(DB_URL);
+    hikariConfig.setUsername(DB_USER);
+    hikariConfig.setPassword(DB_PASSWORD);
+    hikariConfig.setMaximumPoolSize(Integer.parseInt(config.getProperty("db.pool.maxSize", "10")));
+    hikariConfig.setMinimumIdle(Integer.parseInt(config.getProperty("db.pool.minIdle", "5")));
+    hikariConfig.setIdleTimeout(Long.parseLong(config.getProperty("db.pool.idleTimeout", "30000")));
+    hikariConfig.setMaxLifetime(Long.parseLong(config.getProperty("db.pool.maxLifetime", "1800000")));
+    hikariConfig.setConnectionTimeout(Long.parseLong(config.getProperty("db.pool.connectionTimeout", "30000")));
+    hikariConfig.addDataSourceProperty("cachePrepStmts", config.getProperty("db.props.cachePrepStmts", "true"));
+    hikariConfig.addDataSourceProperty("prepStmtCacheSize", config.getProperty("db.props.prepStmtCacheSize", "250"));
+    hikariConfig.addDataSourceProperty("prepStmtCacheSqlLimit", config.getProperty("db.props.prepStmtCacheSqlLimit", "2048"));
+
+    dataSource = new HikariDataSource(hikariConfig);
+  }
+
+  // Get database connection
   public static java.sql.Connection getConnection() throws SQLException {
     return dataSource.getConnection();
   }
 
-  // initialize database
+  // Database initialization
   public static void initDatabase() throws SQLException {
     try (java.sql.Connection conn = getConnection();
          Statement stmt = conn.createStatement()) {
-      // set up the database schema
+      // Create tasks table
       stmt.execute("CREATE TABLE IF NOT EXISTS tasks (" +
           "task_id VARCHAR(36) PRIMARY KEY, " +
           "total_lines INT, " +
           "processed_lines INT DEFAULT 0, " +
-          "map_phase_complete BOOLEAN DEFAULT FALSE, " + // mark map phase complete
+          "map_phase_complete BOOLEAN DEFAULT FALSE, " + 
           "status VARCHAR(20) DEFAULT 'RUNNING', " +
           "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)");
 
-      // create word count table
+      // Create results table
       stmt.execute("CREATE TABLE IF NOT EXISTS word_counts (" +
           "task_id VARCHAR(36), " +
           "word VARCHAR(100), " +
           "count INT, " +
           "PRIMARY KEY (task_id, word))");
 
-      // create worker heartbeats table
+      // Create Worker heartbeat table
       stmt.execute("CREATE TABLE IF NOT EXISTS worker_heartbeats (" +
           "worker_id VARCHAR(36) PRIMARY KEY, " +
           "worker_type VARCHAR(10), " +
@@ -79,29 +139,29 @@ public class WordCount {
     }
   }
 
-  // map stage processor
+  // Map phase processing
   public static class Mapper {
     public static void process(String line, String taskId, Channel channel) throws IOException {
-      // agregate word counts locally
+      // Local aggregation of counts for the same word
       Map<String, Integer> localCounts = new HashMap<>();
 
-      // split line into words
+      // Split words
       String[] words = line.split("\\s+");
       for (String word : words) {
         word = word.toLowerCase().replaceAll("[^a-z]", "");
         if (!word.isEmpty()) {
-          // aggregate word counts
+          // Aggregate counts locally
           localCounts.merge(word, 1, Integer::sum);
         }
       }
 
-      // publish aggregated counts to reduce queue based on hash
+      // Route to different Reducers based on word hash
       for (Map.Entry<String, Integer> entry : localCounts.entrySet()) {
         String word = entry.getKey();
         int count = entry.getValue();
 
-        // use hash to determine routing key
-        int hash = Math.abs(word.hashCode() % 10); // 10 shards predefined
+        // Use consistent hashing to determine routing key
+        int hash = Math.abs(word.hashCode() % REDUCE_SHARDS);
         String routingKey = REDUCE_QUEUE + "." + hash;
 
         channel.basicPublish("", routingKey, null,
@@ -110,10 +170,10 @@ public class WordCount {
     }
   }
 
-  // Reduce stage processor
+  // Reduce phase processing
   public static class Reducer {
     private Map<String, Map<String, Integer>> taskWordCounts = new ConcurrentHashMap<>();
-    private Map<String, Integer> wordCounters = new ConcurrentHashMap<>(); // record word counts
+    private Map<String, Integer> wordCounters = new ConcurrentHashMap<>(); // Track word count for each task
 
     public void process(String message) {
       String[] parts = message.split(":");
@@ -122,20 +182,20 @@ public class WordCount {
         String word = parts[1];
         int count = Integer.parseInt(parts[2]);
 
-        // update word counts for the specific task
+        // Update counts in memory
         taskWordCounts
             .computeIfAbsent(taskId, k -> new ConcurrentHashMap<>())
             .merge(word, count, Integer::sum);
 
-        // update local word counter
+        // Update word counter
         int currentCount = wordCounters.getOrDefault(taskId, 0) + 1;
         wordCounters.put(taskId, currentCount);
 
-        // if the count reaches the batch size, save to DB
+        // If batch threshold reached, save to database
         if (currentCount >= WORD_COUNT_BATCH_SIZE) {
           try {
             saveResultsForTask(taskId);
-            // reset the local counter
+            // Reset counter
             wordCounters.put(taskId, 0);
           } catch (SQLException e) {
             System.err.println("Error saving batch results: " + e.getMessage());
@@ -144,12 +204,16 @@ public class WordCount {
       }
     }
 
-    // save results for a specific task to the database
+    // Save results for a specific task
     private void saveResultsForTask(String taskId) throws SQLException {
       Map<String, Integer> wordCounts = taskWordCounts.get(taskId);
       if (wordCounts == null || wordCounts.isEmpty()) {
         return;
       }
+
+      // Create snapshot of current data to avoid affecting writes from other threads during clearing
+      Map<String, Integer> snapshot = new HashMap<>(wordCounts);
+      wordCounts.clear();
 
       try (java.sql.Connection conn = getConnection()) {
         conn.setAutoCommit(false);
@@ -159,28 +223,26 @@ public class WordCount {
                 "ON DUPLICATE KEY UPDATE count = count + VALUES(count)")) {
 
           int batchCount = 0;
-          for (Map.Entry<String, Integer> entry : wordCounts.entrySet()) {
+          for (Map.Entry<String, Integer> entry : snapshot.entrySet()) {
             ps.setString(1, taskId);
             ps.setString(2, entry.getKey());
             ps.setInt(3, entry.getValue());
             ps.addBatch();
             batchCount++;
 
-            // execute batch if it reaches the threshold
+            // Execute batch every DB_BATCH_SIZE records
             if (batchCount >= DB_BATCH_SIZE) {
               ps.executeBatch();
               batchCount = 0;
             }
           }
 
-          // execute any remaining batch
+          // Execute remaining batch
           if (batchCount > 0) {
             ps.executeBatch();
           }
 
           conn.commit();
-          // clear the local word counts for this task
-          wordCounts.clear();
         } catch (SQLException e) {
           conn.rollback();
           throw e;
@@ -188,7 +250,7 @@ public class WordCount {
       }
     }
 
-    // save results to database (periodically)
+    // Save all results to database
     public void saveResultsToDatabase() {
       for (String taskId : new HashSet<>(taskWordCounts.keySet())) {
         try {
@@ -200,14 +262,14 @@ public class WordCount {
       }
     }
 
-    // check if there are unprocessed data for a specific task
+    // Check if task has unsaved results
     public boolean hasUnprocessedData(String taskId) {
       Map<String, Integer> counts = taskWordCounts.get(taskId);
       return counts != null && !counts.isEmpty();
     }
   }
 
-  // update processed count in the database
+  // Update task progress (batch)
   public static void updateProcessedCount(String taskId, int count) {
     try (java.sql.Connection conn = getConnection();
          PreparedStatement ps = conn.prepareStatement(
@@ -220,7 +282,7 @@ public class WordCount {
     }
   }
 
-  // check and mark map phase as complete
+  // Check and mark Map phase complete
   public static boolean checkAndMarkMapPhaseComplete(String taskId) {
     try (java.sql.Connection conn = getConnection();
          PreparedStatement ps = conn.prepareStatement(
@@ -228,14 +290,14 @@ public class WordCount {
                  "WHERE task_id = ? AND processed_lines >= total_lines AND map_phase_complete = FALSE")) {
       ps.setString(1, taskId);
       int updated = ps.executeUpdate();
-      return updated > 0; // if updated, return true
+      return updated > 0; // If records were updated, it means it's now marked as complete
     } catch (SQLException e) {
       System.err.println("Error marking map phase complete: " + e.getMessage());
       return false;
     }
   }
 
-  // get task info
+  // Get task information
   public static Map<String, Object> getTaskInfo(String taskId) {
     Map<String, Object> info = new HashMap<>();
     try (java.sql.Connection conn = getConnection();
@@ -256,7 +318,7 @@ public class WordCount {
     return info;
   }
 
-  // update worker heartbeat
+  // Update Worker heartbeat
   public static void updateWorkerHeartbeat(String workerId, String workerType) {
     try (java.sql.Connection conn = getConnection();
          PreparedStatement ps = conn.prepareStatement(
@@ -271,63 +333,66 @@ public class WordCount {
     }
   }
 
-  // start Map Worker
+  // Start Map Worker
   public static void startMapWorker(ConnectionFactory factory) throws Exception {
     String workerId = UUID.randomUUID().toString();
     com.rabbitmq.client.Connection rabbitConnection = factory.newConnection();
     Channel channel = rabbitConnection.createChannel();
 
-    // declare queues and exchanges
+    // Declare queues
     channel.queueDeclare(MAP_QUEUE, true, false, false, null);
     channel.queueDeclare(MAP_COMPLETE_QUEUE, true, false, false, null);
 
-    // declare reduce queues
-    for (int i = 0; i < 10; i++) {
+    // Declare multiple Reduce queue shards
+    for (int i = 0; i < REDUCE_SHARDS; i++) {
       channel.queueDeclare(REDUCE_QUEUE + "." + i, true, false, false, null);
     }
 
     System.out.println(" [*] Map Worker " + workerId + " waiting for messages");
 
-    // local progress counters
+    // Local counters for batch updating progress
     Map<String, Integer> localProgressCounters = new HashMap<>();
 
-    // start heartbeat thread
+    // Start heartbeat thread
+    int heartbeatInterval = Integer.parseInt(config.getProperty("worker.heartbeat.interval", "30"));
     ScheduledExecutorService heartbeatExecutor = Executors.newSingleThreadScheduledExecutor();
     heartbeatExecutor.scheduleAtFixedRate(() -> {
       updateWorkerHeartbeat(workerId, "MAP");
-    }, 0, 30, TimeUnit.SECONDS);
+    }, 0, heartbeatInterval, TimeUnit.SECONDS);
 
-    channel.basicQos(10); // process 10 messages at a time
+    // Set QoS
+    int prefetchCount = Integer.parseInt(config.getProperty("rabbit.prefetch", "10"));
+    channel.basicQos(prefetchCount); 
 
     DeliverCallback deliverCallback = (consumerTag, delivery) -> {
       String message = new String(delivery.getBody(), StandardCharsets.UTF_8);
       AMQP.BasicProperties props = delivery.getProperties();
 
-      // get task ID from message properties
+      // Get task ID from message properties
       String taskId = (String) props.getHeaders().get("task_id");
       System.out.println(" [x] Map Worker received [Task: " + taskId + "]");
 
       try {
-        // process the message
+        // Process message
         Mapper.process(message, taskId, channel);
 
-        // update local progress counter
+        // Update local counter
         localProgressCounters.merge(taskId, 1, Integer::sum);
 
-        // check if we need to update the processed count
+        // If batch threshold reached, update database
         int currentCount = localProgressCounters.get(taskId);
         if (currentCount >= PROGRESS_UPDATE_BATCH) {
           updateProcessedCount(taskId, currentCount);
           localProgressCounters.put(taskId, 0);
 
-          // check if map phase is complete
+          // Check if task is complete
           Map<String, Object> taskInfo = getTaskInfo(taskId);
           int processedLines = (int) taskInfo.get("processedLines") + currentCount;
           int totalLines = (int) taskInfo.get("totalLines");
 
           if (processedLines >= totalLines && checkAndMarkMapPhaseComplete(taskId)) {
             System.out.println(" [x] Map phase complete for task " + taskId);
-            // send map complete signal
+            // Send Map phase complete signal
             channel.basicPublish("", MAP_COMPLETE_QUEUE, null,
                 taskId.getBytes(StandardCharsets.UTF_8));
           }
@@ -336,24 +401,24 @@ public class WordCount {
         channel.basicAck(delivery.getEnvelope().getDeliveryTag(), false);
       } catch (Exception e) {
         System.err.println("Error processing map message: " + e.getMessage());
-        // requeue the message
+        // Message processing failed, requeue
         channel.basicNack(delivery.getEnvelope().getDeliveryTag(), false, true);
       }
     };
 
     channel.basicConsume(MAP_QUEUE, false, deliverCallback, consumerTag -> { });
 
-    // add shutdown hook
+    // Add shutdown hook to ensure resources are released properly
     Runtime.getRuntime().addShutdownHook(new Thread(() -> {
       try {
-        // submit any remaining progress
+        // Submit any unsaved progress
         for (Map.Entry<String, Integer> entry : localProgressCounters.entrySet()) {
           if (entry.getValue() > 0) {
             updateProcessedCount(entry.getKey(), entry.getValue());
           }
         }
 
-        // 更新worker状态
+        // Update worker status
         try (java.sql.Connection conn = getConnection();
              PreparedStatement ps = conn.prepareStatement(
                  "UPDATE worker_heartbeats SET status = 'INACTIVE' WHERE worker_id = ?")) {
@@ -370,32 +435,59 @@ public class WordCount {
     }));
   }
 
-  // start Reduce Worker
+  // Start Reduce Worker
   public static void startReduceWorker(ConnectionFactory factory) throws Exception {
     String workerId = UUID.randomUUID().toString();
     com.rabbitmq.client.Connection rabbitConnection = factory.newConnection();
     Channel channel = rabbitConnection.createChannel();
 
-    // declare queues
+    // Declare queues and exchanges
     channel.queueDeclare(MAP_COMPLETE_QUEUE, true, false, false, null);
     channel.queueDeclare(RESULT_QUEUE, true, false, false, null);
 
-    // declare reduce queues
-    int shardId = new Random().nextInt(10);
-    String reduceQueue = REDUCE_QUEUE + "." + shardId;
-    channel.queueDeclare(reduceQueue, true, false, false, null);
-
-    System.out.println(" [*] Reduce Worker " + workerId + " waiting for messages on shard " + shardId);
-
+    // Select shards to process
+    int shardId;
+    String shardMode = config.getProperty("reduce.shard.mode", "random");
+    
+    if ("random".equals(shardMode)) {
+      // Randomly select a shard
+      shardId = new Random().nextInt(REDUCE_SHARDS);
+    } else if ("all".equals(shardMode)) {
+      // Process all shards (this is just an example, actual implementation might be more complex)
+      shardId = -1;
+    } else {
+      // Read specified shard from configuration
+      shardId = Integer.parseInt(config.getProperty("reduce.shard.id", "0"));
+    }
+    
     Reducer reducer = new Reducer();
+    List<String> consumedQueues = new ArrayList<>();
+    
+    // If processing all shards
+    if (shardId == -1) {
+      System.out.println(" [*] Reduce Worker " + workerId + " waiting for messages on ALL shards");
+      for (int i = 0; i < REDUCE_SHARDS; i++) {
+        String queueName = REDUCE_QUEUE + "." + i;
+        channel.queueDeclare(queueName, true, false, false, null);
+        consumedQueues.add(queueName);
+      }
+    } else {
+      // Process a single shard
+      String reduceQueue = REDUCE_QUEUE + "." + shardId;
+      channel.queueDeclare(reduceQueue, true, false, false, null);
+      consumedQueues.add(reduceQueue);
+      System.out.println(" [*] Reduce Worker " + workerId + " waiting for messages on shard " + shardId);
+    }
 
-    // start heartbeat thread
+    // Start heartbeat thread
+    int heartbeatInterval = Integer.parseInt(config.getProperty("worker.heartbeat.interval", "30"));
     ScheduledExecutorService heartbeatExecutor = Executors.newSingleThreadScheduledExecutor();
     heartbeatExecutor.scheduleAtFixedRate(() -> {
       updateWorkerHeartbeat(workerId, "REDUCE");
-    }, 0, 30, TimeUnit.SECONDS);
+    }, 0, heartbeatInterval, TimeUnit.SECONDS);
 
-    // save results to database every 30 seconds
+    // Periodically save results
+    int saveInterval = Integer.parseInt(config.getProperty("reducer.save.interval", "30"));
     ScheduledExecutorService saveExecutor = Executors.newSingleThreadScheduledExecutor();
     saveExecutor.scheduleAtFixedRate(() -> {
       try {
@@ -403,9 +495,9 @@ public class WordCount {
       } catch (Exception e) {
         System.err.println("Error in scheduled save: " + e.getMessage());
       }
-    }, 30, 30, TimeUnit.SECONDS);  // inreased to 30 seconds
+    }, saveInterval, saveInterval, TimeUnit.SECONDS);
 
-    // handle reduce messages
+    // Process regular Reduce messages
     DeliverCallback reduceCallback = (consumerTag, delivery) -> {
       String message = new String(delivery.getBody(), StandardCharsets.UTF_8);
 
@@ -418,21 +510,22 @@ public class WordCount {
       }
     };
 
-    // handle map complete messages
+    // Process Map complete signals
     DeliverCallback mapCompleteCallback = (consumerTag, delivery) -> {
       String taskId = new String(delivery.getBody(), StandardCharsets.UTF_8);
       System.out.println(" [x] Received map phase complete signal for task: " + taskId);
 
-      // check if the map phase is complete
+      // Ensure all results are saved
       try {
         if (reducer.hasUnprocessedData(taskId)) {
           reducer.saveResultsToDatabase();
         }
 
-        // simulate some processing time
-        Thread.sleep(5000);
+        // Wait a while to ensure all Reducers complete processing
+        int completeDelay = Integer.parseInt(config.getProperty("reducer.complete.delay", "5000"));
+        Thread.sleep(completeDelay);
 
-        // send completion signal to result queue
+        // Send task complete signal
         channel.basicPublish("", RESULT_QUEUE, null,
             ("__COMPLETE__:" + taskId).getBytes(StandardCharsets.UTF_8));
         System.out.println(" [x] Sent completion signal for task " + taskId);
@@ -444,18 +537,20 @@ public class WordCount {
       }
     };
 
-    // consume messages
-    channel.basicConsume(reduceQueue, false, reduceCallback, consumerTag -> { });
+    // Consume all required queues
+    for (String queueName : consumedQueues) {
+      channel.basicConsume(queueName, false, reduceCallback, consumerTag -> { });
+    }
     channel.basicConsume(MAP_COMPLETE_QUEUE, false, mapCompleteCallback, consumerTag -> { });
 
-    // add shutdown hook
+    // Add shutdown hook
     Runtime.getRuntime().addShutdownHook(new Thread(() -> {
       try {
-        // submit any remaining results
+        // Save any unsaved results
         reducer.saveResultsToDatabase();
 
-    // update worker status
-          try (java.sql.Connection conn = getConnection();  // Fully qualify Connection with java.sql
+        // Update worker status
+        try (java.sql.Connection conn = getConnection();
              PreparedStatement ps = conn.prepareStatement(
                  "UPDATE worker_heartbeats SET status = 'INACTIVE' WHERE worker_id = ?")) {
           ps.setString(1, workerId);
@@ -472,7 +567,7 @@ public class WordCount {
     }));
   }
 
-  // start Result Collector
+  // Result collector
   public static void startResultCollector(ConnectionFactory factory) throws Exception {
     String workerId = UUID.randomUUID().toString();
     com.rabbitmq.client.Connection rabbitConnection = factory.newConnection();
@@ -482,21 +577,22 @@ public class WordCount {
 
     System.out.println(" [*] Result Collector " + workerId + " waiting for results");
 
-    // start heartbeat thread
+    // Start heartbeat thread
+    int heartbeatInterval = Integer.parseInt(config.getProperty("worker.heartbeat.interval", "30"));
     ScheduledExecutorService heartbeatExecutor = Executors.newSingleThreadScheduledExecutor();
     heartbeatExecutor.scheduleAtFixedRate(() -> {
       updateWorkerHeartbeat(workerId, "RESULT");
-    }, 0, 30, TimeUnit.SECONDS);
+    }, 0, heartbeatInterval, TimeUnit.SECONDS);
 
     DeliverCallback deliverCallback = (consumerTag, delivery) -> {
       String message = new String(delivery.getBody(), StandardCharsets.UTF_8);
 
-      // check if the message is a completion signal
+      // Check if it's a completion signal
       if (message.startsWith("__COMPLETE__:")) {
         String taskId = message.substring("__COMPLETE__:".length());
         System.out.println(" [x] Received completion signal for task: " + taskId);
 
-        // update task status in the database
+        // Update task status to completed
         try (java.sql.Connection conn = getConnection();
              PreparedStatement ps = conn.prepareStatement(
                  "UPDATE tasks SET status = 'COMPLETED' WHERE task_id = ?")) {
@@ -506,7 +602,7 @@ public class WordCount {
           System.err.println("Error updating task status: " + e.getMessage());
         }
 
-        // print task results
+        // Get and print final results
         printTaskResults(taskId);
       }
 
@@ -515,10 +611,10 @@ public class WordCount {
 
     channel.basicConsume(RESULT_QUEUE, false, deliverCallback, consumerTag -> { });
 
-//   add shutdown hook
+    // Add shutdown hook
     Runtime.getRuntime().addShutdownHook(new Thread(() -> {
       try {
-        // submit any remaining results
+        // Update worker status
         try (java.sql.Connection conn = getConnection();
              PreparedStatement ps = conn.prepareStatement(
                  "UPDATE worker_heartbeats SET status = 'INACTIVE' WHERE worker_id = ?")) {
@@ -528,24 +624,29 @@ public class WordCount {
 
         heartbeatExecutor.shutdown();
         channel.close();
-        rabbitConnection.close();  // Changed from connection to rabbitConnection
+        rabbitConnection.close();
       } catch (Exception e) {
         System.err.println("Error during shutdown: " + e.getMessage());
       }
     }));
   }
 
-  // print task results
+  // Print task final results
   private static void printTaskResults(String taskId) {
+    int resultLimit = Integer.parseInt(config.getProperty("result.limit", "100"));
+    String outputDir = config.getProperty("result.output.dir", ".");
+    
     try (java.sql.Connection conn = getConnection();
          PreparedStatement ps = conn.prepareStatement(
-             "SELECT word, count FROM word_counts WHERE task_id = ? ORDER BY count DESC LIMIT 100")) {
+             "SELECT word, count FROM word_counts WHERE task_id = ? ORDER BY count DESC LIMIT ?")) {
       ps.setString(1, taskId);
+      ps.setInt(2, resultLimit);
 
       System.out.println("\n=== Final Results for Task " + taskId + " ===");
       try (ResultSet rs = ps.executeQuery()) {
-        // print top 100 results
-        try (PrintWriter writer = new PrintWriter(new FileWriter("wordcount_results_" + taskId + ".txt"))) {
+        // Write results to file
+        File outputFile = new File(outputDir, "wordcount_results_" + taskId + ".txt");
+        try (PrintWriter writer = new PrintWriter(new FileWriter(outputFile))) {
           int rank = 1;
           while (rs.next()) {
             String word = rs.getString("word");
@@ -556,24 +657,24 @@ public class WordCount {
           }
         }
       }
-      System.out.println("=== Full results saved to wordcount_results_" + taskId + ".txt ===\n");
+      System.out.println("=== Full results saved to " + outputDir + "/wordcount_results_" + taskId + ".txt ===\n");
     } catch (SQLException | IOException e) {
       System.err.println("Error printing results: " + e.getMessage());
     }
   }
 
-  // submit input file
+  // Submit input file
   public static void submitInputFile(ConnectionFactory factory, String filePath) throws Exception {
-    // generate a unique task ID
+    // Generate task ID
     String taskId = UUID.randomUUID().toString();
 
-    // count total lines in the input file
+    // Calculate total lines
     int totalLines = 0;
     try (BufferedReader reader = new BufferedReader(new FileReader(filePath))) {
       while (reader.readLine() != null) totalLines++;
     }
 
-    // insert task info into the database
+    // Create task record in database
     try (java.sql.Connection conn = getConnection();
          PreparedStatement ps = conn.prepareStatement(
              "INSERT INTO tasks (task_id, total_lines) VALUES (?, ?)")) {
@@ -587,26 +688,27 @@ public class WordCount {
 
     channel.queueDeclare(MAP_QUEUE, true, false, false, null);
 
-    // read the input file and publish each line to the map queue
+    // Reset to beginning of file
     try (BufferedReader reader = new BufferedReader(new FileReader(filePath))) {
       String line;
       int lineCount = 0;
+      int batchSize = Integer.parseInt(config.getProperty("submit.batch.size", "1000"));
 
       while ((line = reader.readLine()) != null) {
-        // publish each line to the map queue
+        // Include task ID in message properties
         Map<String, Object> headers = new HashMap<>();
         headers.put("task_id", taskId);
 
         AMQP.BasicProperties props = new AMQP.BasicProperties.Builder()
             .headers(headers)
-            .deliveryMode(2) 
+            .deliveryMode(2) // Persistent message
             .build();
 
         channel.basicPublish("", MAP_QUEUE, props, line.getBytes(StandardCharsets.UTF_8));
         lineCount++;
 
-        // update progress in the database
-        if (lineCount % 1000 == 0) {
+        // Output progress every batchSize lines
+        if (lineCount % batchSize == 0) {
           System.out.println(" [x] Sent " + lineCount + "/" + totalLines + " lines for task " + taskId);
         }
       }
@@ -617,12 +719,13 @@ public class WordCount {
     rabbitConnection.close();
   }
 
-  // monitor system status
+  // Monitor system status
   public static void startMonitor() {
+    int monitorInterval = Integer.parseInt(config.getProperty("monitor.interval", "10"));
     ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
     executor.scheduleAtFixedRate(() -> {
       try (java.sql.Connection conn = getConnection()) {
-        // check active workers
+        // Check Worker status
         try (PreparedStatement ps = conn.prepareStatement(
             "SELECT worker_type, COUNT(*) as count FROM worker_heartbeats " +
                 "WHERE last_heartbeat > DATE_SUB(NOW(), INTERVAL 2 MINUTE) AND status = 'ACTIVE' " +
@@ -640,7 +743,7 @@ public class WordCount {
           }
         }
 
-        // check running tasks
+        // Check running tasks
         try (PreparedStatement ps = conn.prepareStatement(
             "SELECT task_id, total_lines, processed_lines, status, " +
                 "ROUND((processed_lines / total_lines) * 100, 2) as progress " +
@@ -663,7 +766,7 @@ public class WordCount {
           }
         }
 
-        // check recently completed tasks
+        // Check recently completed tasks
         try (PreparedStatement ps = conn.prepareStatement(
             "SELECT task_id, total_lines, processed_lines, " +
                 "DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') as started " +
@@ -689,9 +792,9 @@ public class WordCount {
       } catch (SQLException e) {
         System.err.println("Error monitoring system: " + e.getMessage());
       }
-    }, 0, 10, TimeUnit.SECONDS);
+    }, 0, monitorInterval, TimeUnit.SECONDS);
 
-    // keep the main thread alive
+    // Keep main thread running
     try {
       Thread.currentThread().join();
     } catch (InterruptedException e) {
@@ -700,12 +803,28 @@ public class WordCount {
   }
 
   public static void main(String[] args) throws Exception {
+    // Allow configuration file path to be specified via command line arguments
+    for (int i = 0; i < args.length - 1; i++) {
+      if (args[i].equals("--config") || args[i].equals("-c")) {
+        System.setProperty("config.path", args[i + 1]);
+        
+        // Rearrange args, removing config options
+        String[] newArgs = new String[args.length - 2];
+        System.arraycopy(args, 0, newArgs, 0, i);
+        if (i + 2 < args.length) {
+          System.arraycopy(args, i + 2, newArgs, i, args.length - i - 2);
+        }
+        args = newArgs;
+        break;
+      }
+    }
+
     if (args.length < 1) {
-      System.err.println("Usage: java WordCount [map|reduce|result|submit <file>|monitor]");
+      System.err.println("Usage: java WordCount [--config <path>] [map|reduce|result|submit <file>|monitor]");
       System.exit(1);
     }
 
-    // initialize the database
+    // Initialize database
     try {
       initDatabase();
     } catch (SQLException e) {
@@ -714,13 +833,27 @@ public class WordCount {
     }
 
     ConnectionFactory factory = new ConnectionFactory();
-    factory.setHost("localhost");
-    // set RabbitMQ connection parameters
-    factory.setAutomaticRecoveryEnabled(true);
-    factory.setNetworkRecoveryInterval(5000); // 5 seconds to recover from network issues
+    // Read RabbitMQ connection info from configuration
+    factory.setHost(config.getProperty("rabbit.host", "localhost"));
+    if (config.containsKey("rabbit.port")) {
+        factory.setPort(Integer.parseInt(config.getProperty("rabbit.port")));
+    }
+    if (config.containsKey("rabbit.username")) {
+        factory.setUsername(config.getProperty("rabbit.username"));
+    }
+    if (config.containsKey("rabbit.password")) {
+        factory.setPassword(config.getProperty("rabbit.password"));
+    }
+    
+    // Set connection recovery options
+    factory.setAutomaticRecoveryEnabled(Boolean.parseBoolean(
+        config.getProperty("rabbit.recovery.enabled", "true")));
+    factory.setNetworkRecoveryInterval(Long.parseLong(
+        config.getProperty("rabbit.recovery.interval", "5000")));
 
-    // set heartbeat parameters
-    factory.setRequestedHeartbeat(30); // 30 seconds heartbeat interval
+    // Set heartbeat interval
+    factory.setRequestedHeartbeat(Integer.parseInt(
+        config.getProperty("rabbit.heartbeat", "30")));
 
     String command = args[0];
     switch (command) {
