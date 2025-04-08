@@ -13,22 +13,22 @@ public class WordCount {
   private static final String REDUCE_QUEUE = "reduce_queue";
   private static final String RESULT_QUEUE = "result_queue";
 
-  // Map阶段处理
+  // map stage processor
   public static class Mapper {
     public static void process(String line, Channel channel) throws IOException {
 
-      // 预处理：替换所有标点和特殊字符为空格
+      //preprocess line
       line = line.replaceAll("[\\p{Punct}&&[^-]]", " ");
-      // 先替换连字符为空格
+      // replace hyphens with spaces
       line = line.replaceAll("-", " ");
 
-      // 拆分单词并发送到Reduce队列
+      // split line into words
       String[] words = line.split("\\s+");
       for (String word : words) {
-        // 只保留字母，转为小写
+        // only process non-empty words
         word = word.toLowerCase().replaceAll("[^a-z]", "");
         if (!word.isEmpty()) {
-          // 使用单词作为路由键，将"1"作为计数发送
+          // publish word count to reduce queue
           channel.basicPublish("", REDUCE_QUEUE, null,
               (word + ":1").getBytes(StandardCharsets.UTF_8));
         }
@@ -81,7 +81,7 @@ public class WordCount {
     channel.basicConsume(MAP_QUEUE, false, deliverCallback, consumerTag -> { });
   }
 
-  // 启动Reduce Worker
+  // start Reduce Worker
   public static void startReduceWorker(ConnectionFactory factory) throws Exception {
     Connection connection = factory.newConnection();
     Channel channel = connection.createChannel();
@@ -107,7 +107,7 @@ public class WordCount {
 
     channel.basicConsume(REDUCE_QUEUE, false, deliverCallback, consumerTag -> { });
 
-    // 定期发送结果到结果队列
+    // schedule sending results every 10 seconds
     ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
     executor.scheduleAtFixedRate(() -> {
       try {
@@ -126,7 +126,7 @@ public class WordCount {
     }, 10, 10, TimeUnit.SECONDS);
   }
 
-  // 结果收集器
+  // result collector
   public static void startResultCollector(ConnectionFactory factory) throws Exception {
     Connection connection = factory.newConnection();
     Channel channel = connection.createChannel();
@@ -167,7 +167,7 @@ public class WordCount {
     channel.basicConsume(RESULT_QUEUE, true, deliverCallback, consumerTag -> { });
   }
 
-  // 提交输入文件
+  // submit input file
   public static void submitInputFile(ConnectionFactory factory, String filePath) throws Exception {
     Connection connection = factory.newConnection();
     Channel channel = connection.createChannel();
