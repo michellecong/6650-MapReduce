@@ -1,0 +1,15 @@
+# 忽略日志文件
+*.log
+
+# 忽略 logs 目录
+logs/
+**/logs/
+
+# 忽略 Maven 的 target 目录
+target/
+**/target/
+
+# VS Code 相关
+.vscode/
+
+.properties

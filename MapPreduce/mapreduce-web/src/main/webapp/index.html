@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MapReduce Web API Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        h1 { color: #333; }
+        textarea { width: 100%; height: 200px; margin-bottom: 10px; }
+        .form-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; }
+        input[type="text"], input[type="number"] { width: 100%; padding: 8px; box-sizing: border-box; }
+        button { padding: 10px 20px; background-color: #4CAF50; color: white; border: none; cursor: pointer; margin-right: 10px; }
+        button:hover { background-color: #45a049; }
+        #result { margin-top: 20px; border: 1px solid #ddd; padding: 10px; background-color: #f9f9f9; }
+        .tabs { display: flex; margin-bottom: 20px; }
+        .tab { padding: 10px 20px; cursor: pointer; border: 1px solid #ddd; background-color: #f1f1f1; }
+        .tab.active { background-color: #4CAF50; color: white; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+    </style>
+</head>
+<body>
+    <h1>MapReduce Web API Test</h1>
+    
+    <div class="tabs">
+        <div class="tab active" onclick="openTab(event, 'submit-tab')">Submit Job</div>
+        <div class="tab" onclick="openTab(event, 'status-tab')">Check Status</div>
+        <div class="tab" onclick="openTab(event, 'all-jobs-tab')">All Jobs</div>
+    </div>
+    
+    <div id="submit-tab" class="tab-content active">
+        <h2>Submit New Job</h2>
+        <div class="form-group">
+            <label for="inputText">Text Content:</label>
+            <textarea id="inputText" placeholder="Enter text to process..."></textarea>
+        </div>
+        <div class="form-group">
+            <label for="fileName">File Name:</label>
+            <input type="text" id="fileName" placeholder="File name (optional)" value="input.txt">
+        </div>
+        <div class="form-group">
+            <label for="numReduceTasks">Number of Reduce Tasks:</label>
+            <input type="number" id="numReduceTasks" placeholder="Number of reduce tasks" value="5" min="1" max="20">
+        </div>
+        <div class="form-group">
+            <input type="checkbox" id="useBlob" checked> 
+            <label for="useBlob" style="display: inline;">Store in Azure Blob Storage</label>
+        </div>
+        <button onclick="submitJob()">Submit Job</button>
+    </div>
+    
+    <div id="status-tab" class="tab-content">
+        <h2>Check Job Status</h2>
+        <div class="form-group">
+            <label for="jobId">Job ID:</label>
+            <input type="text" id="jobId" placeholder="Enter Job ID">
+        </div>
+        <button onclick="checkStatus()">Check Status</button>
+        <button onclick="getWordCounts()">Get Word Counts</button>
+    </div>
+    
+    <div id="all-jobs-tab" class="tab-content">
+        <h2>All Jobs</h2>
+        <button onclick="getAllJobs()">Refresh Jobs List</button>
+    </div>
+    
+    <div id="result"></div>
+    
+    <script>
+        // 获取当前的 contextPath
+        const basePath = window.location.pathname.split("/")[1]; // 获取 /mapreduce-web
+        
+        function openTab(evt, tabName) {
+            var i, tabcontent, tablinks;
+            tabcontent = document.getElementsByClassName("tab-content");
+            for (i = 0; i < tabcontent.length; i++) {
+                tabcontent[i].className = tabcontent[i].className.replace(" active", "");
+            }
+            tablinks = document.getElementsByClassName("tab");
+            for (i = 0; i < tablinks.length; i++) {
+                tablinks[i].className = tablinks[i].className.replace(" active", "");
+            }
+            document.getElementById(tabName).className += " active";
+            evt.currentTarget.className += " active";
+        }
+        
+        function submitJob() {
+            const inputText = document.getElementById('inputText').value;
+            const fileName = document.getElementById('fileName').value;
+            const numReduceTasks = document.getElementById('numReduceTasks').value;
+            const useBlob = document.getElementById('useBlob').checked;
+            
+            if (!inputText) {
+                alert('Please enter text to process');
+                return;
+            }
+            
+            document.getElementById('result').innerHTML = 'Submitting job, please wait...';
+            
+            fetch(`/${basePath}/api/jobs`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    text: inputText,
+                    fileName: fileName,
+                    numReduceTasks: parseInt(numReduceTasks),
+                    useBlob: useBlob
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                document.getElementById('result').innerHTML = 
+                    `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+                
+                if (data.jobId) {
+                    document.getElementById('jobId').value = data.jobId;
+                    // Switch to status tab
+                    openTab({currentTarget: document.getElementsByClassName('tab')[1]}, 'status-tab');
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                document.getElementById('result').innerHTML = 
+                    `<p style="color: red">Error: ${error.message}</p>`;
+            });
+        }
+        
+        function checkStatus() {
+            const jobId = document.getElementById('jobId').value;
+            
+            if (!jobId) {
+                alert('Please enter a Job ID');
+                return;
+            }
+            
+            document.getElementById('result').innerHTML = 'Checking status, please wait...';
+            
+            fetch(`/${basePath}/api/jobs/${jobId}`)
+            .then(response => response.json())
+            .then(data => {
+                document.getElementById('result').innerHTML = 
+                    `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                document.getElementById('result').innerHTML = 
+                    `<p style="color: red">Error: ${error.message}</p>`;
+            });
+        }
+        
+        function getWordCounts() {
+            const jobId = document.getElementById('jobId').value;
+            
+            if (!jobId) {
+                alert('Please enter a Job ID');
+                return;
+            }
+            
+            document.getElementById('result').innerHTML = 'Getting word counts, please wait...';
+            
+            fetch(`/${basePath}/api/jobs/${jobId}/wordcount?limit=50`)
+            .then(response => response.json())
+            .then(data => {
+                document.getElementById('result').innerHTML = 
+                    `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                document.getElementById('result').innerHTML = 
+                    `<p style="color: red">Error: ${error.message}</p>`;
+            });
+        }
+        
+        function getAllJobs() {
+            document.getElementById('result').innerHTML = 'Getting all jobs, please wait...';
+            
+            fetch(`/${basePath}/api/jobs`)
+            .then(response => {
+                // 检查响应是否成功
+                if (!response.ok) {
+                    throw new Error(`HTTP error! Status: ${response.status}`);
+                }
+                return response.json(); // 解析 JSON 数据
+            })
+            .then(data => {
+                // 输出返回的 JSON 数据
+                document.getElementById('result').innerHTML = 
+                    `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                document.getElementById('result').innerHTML = 
+                    `<p style="color: red">Error: ${error.message}</p>`;
+            });
+        }
+        
+        // 默认打开提交作业的标签
+        document.addEventListener('DOMContentLoaded', function() {
+            openTab({currentTarget: document.getElementsByClassName('tab')[0]}, 'submit-tab');
+        });
+
+    </script>
+</body>
+</html>
