@@ -1,0 +1,37 @@
+# Database configuration
+db.port=3306
+db.name=your_database_name
+db.host=your_database_host
+db.user=your_database_username
+db.password=your_database_password
+db.useSSL=true
+db.allowPublicKeyRetrieval=true
+db.serverTimezone=UTC
+db.useUnicode=true
+db.characterEncoding=UTF-8
+
+# RabbitMQ configuration
+rabbitmq.host=localhost
+rabbitmq.port=5672
+rabbitmq.username=your_rabbitmq_username
+rabbitmq.password=your_rabbitmq_password
+rabbitmq.tasks_exchange=tasks_exchange
+rabbitmq.results_exchange=results_exchange
+rabbitmq.status_exchange=status_exchange
+
+# Azure Blob Storage configuration
+azure.storage.connectionString=your_azure_connection_string
+azure.storage.containerName=your_container_name
+azure.storage.enabled=true
+
+mapreduce.use_only_blob_storage=true
+
+# MapReduce configuration
+mapreduce.baseDir=mapreduce_data
+mapreduce.default_num_reduce_tasks=10
+mapreduce.default_chunk_size=1024
+mapreduce.heartbeat_interval=5000
+mapreduce.worker_timeout_seconds=15
+mapreduce.task_timeout=300000
+mapreduce.max_task_retries=3
+mapreduce.task_monitor_interval_seconds=10
