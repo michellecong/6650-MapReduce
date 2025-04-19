@@ -1,0 +1,50 @@
+# Configuration file example
+# Generated on April 18, 2025
+
+#---------------------------------------
+# Database Configuration
+#---------------------------------------
+db.port=3306
+db.name=mapreduce
+db.host=localhost
+db.user=mysqluser
+db.password=mysqlpassword
+db.useSSL=true
+db.allowPublicKeyRetrieval=true
+db.serverTimezone=UTC
+db.useUnicode=true
+db.characterEncoding=UTF-8
+
+#---------------------------------------
+# RabbitMQ Configuration
+#---------------------------------------
+rabbitmq.host=localhost
+rabbitmq.port=5672
+rabbitmq.username=guest
+rabbitmq.password=guest
+rabbitmq.exchange=tasks_exchange
+rabbitmq.jobQueue=job_queue
+
+#---------------------------------------
+# Azure Blob Storage Configuration
+#---------------------------------------
+azure.storage.connectionString=your_connection_string
+azure.storage.containerName=your_container_name
+azure.storage.enabled=true
+
+#---------------------------------------
+# Application Settings
+#---------------------------------------
+app.name=MapReduceProcessor
+app.version=1.0.0
+app.maxThreads=10
+app.timeout=30000
+app.retryCount=3
+
+#---------------------------------------
+# Logging Configuration
+#---------------------------------------
+logging.level=INFO
+logging.file.path=/var/log/mapreduce
+logging.file.maxSize=10MB
+logging.file.maxHistory=10
