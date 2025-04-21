@@ -143,24 +143,31 @@ public class TaskMonitor {
      * 从Blob URL中提取分区ID
      */
     private int extractPartitionIdFromBlobUrl(String blobUrl) {
+        logger.debug("Extracting partition ID from URL: {}", blobUrl);
+
         try {
-            // 查找URL中的part_X.txt模式
-            int partIndex = blobUrl.lastIndexOf("/part_");
-            if (partIndex != -1) {
-                // 从URL中提取分区号（part_后面，.txt前面的数字）
-                int startIndex = partIndex + 6; // "/part_"的长度是6
-                int endIndex = blobUrl.indexOf(".txt", startIndex);
-                if (endIndex != -1) {
-                    String partIdStr = blobUrl.substring(startIndex, endIndex);
-                    int partitionId = Integer.parseInt(partIdStr);
-                    logger.info("Successfully extracted partition ID {} from URL: {}", partitionId, blobUrl);
-                    return partitionId;
-                }
+            // 处理URL编码
+            java.net.URL url = new java.net.URL(blobUrl);
+            String path = java.net.URLDecoder.decode(url.getPath(), "UTF-8");
+
+            // 添加更详细的日志
+            logger.debug("Decoded path: {}", path);
+
+            // 使用正则表达式匹配part_X.txt模式
+            java.util.regex.Pattern pattern = java.util.regex.Pattern.compile("/part_(\\d+).txt");
+            java.util.regex.Matcher matcher = pattern.matcher(path);
+
+            if (matcher.find()) {
+                int partitionId = Integer.parseInt(matcher.group(1));
+                logger.info("Successfully extracted partition ID {} from URL", partitionId);
+                return partitionId;
+            } else {
+                logger.warn("No partition ID pattern found in URL: {}", blobUrl);
             }
         } catch (Exception e) {
-            logger.error("Error extracting partition ID from URL: " + blobUrl, e);
+            logger.error("Error extracting partition ID from URL: {} - {}", blobUrl, e.getMessage());
         }
-        
+
         logger.warn("Could not extract partition ID from URL, defaulting to 0: {}", blobUrl);
         return 0;
     }
