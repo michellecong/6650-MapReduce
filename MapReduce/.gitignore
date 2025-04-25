@@ -13,5 +13,6 @@ target/
 .vscode/
 
 .properties
-.txt
+*.txt
 .idea/
+*.csv
