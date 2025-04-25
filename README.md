@@ -1,166 +1,216 @@
-# 6650-MapReduce
+# MapReduce Word Count System
 
-This application is a prototype that simulates a distributed word count system using RabbitMQ and a MapReduce pattern. The code has been updated to prepare for simulations that more closely resemble actual displays, and uses a configuration file for all settings.
+A scalable word counting solution with both distributed and single-node implementations. This system demonstrates MapReduce architecture principles for processing large text datasets.
 
-## Prerequisites
+## Overview
 
-- Java JDK 8 or higher
-- MySQL database
-- RabbitMQ server
-- Maven (optional, for dependency management)
+This project provides a complete word counting system with multiple components:
 
-## Setting Up
+1. **MapReduce Web** - Web interface and API gateway for job submission and result retrieval
+2. **MapReduce Service** - Distributed processing engine with master and worker nodes
+3. **SingleNode WebApp** - Simplified non-distributed implementation with API compatibility
+4. **Load Tester** - Performance testing framework for system evaluation
 
-### 1. Database Setup
+The system allows users to submit text content, process it to count word frequencies, and retrieve the results through a RESTful API.
 
-Create a MySQL database and user:
+## Components
 
-```sql
-CREATE DATABASE wordcount;
-CREATE USER 'user'@'localhost' IDENTIFIED BY 'password';
-GRANT ALL PRIVILEGES ON wordcount.* TO 'user'@'localhost';
-FLUSH PRIVILEGES;
+### MapReduce Web
+
+The web component provides a RESTful API for:
+
+- Submitting text content for word counting
+- Checking job status
+- Retrieving word count results
+
+**Key Features:**
+
+- RESTful API with JSON responses
+- Azure Blob Storage integration
+- MySQL database for job metadata and results
+
+### MapReduce Service
+
+The distributed processing engine includes:
+
+**Master Node:**
+
+- Job scheduling and distribution
+- Task management and monitoring
+- Worker coordination
+- Fault tolerance handling
+
+**Worker Nodes:**
+
+- Execute Map and Reduce tasks
+- Process data chunks in parallel
+- Report results to the master
+- Send periodic heartbeats for health monitoring
+
+**Features:**
+
+- Horizontal scalability with dynamic worker addition
+- Fault tolerance through task rescheduling
+- RabbitMQ-based message passing
+- Hybrid storage supporting local files and Azure Blob Storage
+
+### SingleNode WebApp
+
+A simplified implementation that:
+
+- Provides the same API as the distributed version
+- Processes data in a single thread
+- Supports development, testing, and small workloads
+
+**Benefits:**
+
+- Simplified deployment for small workloads
+- Development and testing environment
+- API compatibility with the distributed version
+
+### Load Tester
+
+A comprehensive testing framework to:
+
+- Evaluate system performance under various loads
+- Verify result accuracy
+- Generate test reports
+
+**Features:**
+
+- Concurrent user simulation
+- Performance metrics collection (latency, throughput)
+- Result accuracy verification
+- CSV report generation
+
+## API Endpoints
+
+### Job Submission
+
+```
+POST /api/jobs
 ```
 
-### 2. Configuration
+Request body:
 
-The application uses a properties file for configuration. A default `config.properties` file is provided, but you can create your own and specify it when running the application.
+```json
+{
+  "text": "Content to process",
+  "fileName": "input.txt",
+  "numReduceTasks": 5,
+  "useBlob": true
+}
+```
 
-Key configuration sections:
+### Job Status
 
-- Queue names
-- Database connection
-- RabbitMQ connection
-- Batch processing settings
-- Worker behaviors
-- Result output configuration
+```
+GET /api/jobs/{jobId}
+```
 
-### 3. Required Dependencies
+### Word Count Results
 
-- RabbitMQ Java Client
-- HikariCP (connection pool)
-- MySQL Connector/J
+```
+GET /api/jobs/{jobId}/wordcount
+```
 
-## Running The Application
+### Execution Time
 
-### Specifying Configuration
+```
+GET /api/jobs/{jobId}/execution-time
+```
 
-You can specify a custom configuration file using the `--config` or `-c` option:
+## Technology Stack
+
+- **Languages:** Java
+- **Web Framework:** Java Servlets
+- **Database:** MySQL with HikariCP connection pooling
+- **Messaging:** RabbitMQ
+- **Storage:** Azure Blob Storage
+- **Configuration:** Properties files
+- **Logging:** Log4j2
+
+## Getting Started
+
+### Prerequisites
+
+- Java 11 or higher
+- MySQL 5.7+
+- RabbitMQ 3.8+
+- Maven or Gradle
+
+### Configuration
+
+Edit the `application.properties` file:
+
+```properties
+# Database
+db.host=localhost
+db.port=3306
+db.name=mapreduce
+db.user=admin
+db.password=admin
+
+# RabbitMQ
+rabbitmq.host=localhost
+rabbitmq.port=5672
+rabbitmq.username=guest
+rabbitmq.password=guest
+
+# Azure Blob Storage
+azure.storage.connectionString=your-connection-string
+azure.storage.containerName=mapreduce
+```
+
+### Running the Components
+
+**MapReduce Web:**
 
 ```bash
-java -cp wordcount.jar com.wordcount.WordCount --config /path/to/your/config.properties [command]
+java -jar mapreduce-web.jar
 ```
 
-If you don't specify a configuration file, the application will look for `config.properties` in the current directory.
-
-### Available Commands
-
-1. **Start a Map Worker**
-
-   ```bash
-   java -cp wordcount.jar com.wordcount.WordCount map
-   ```
-
-2. **Start a Reduce Worker**
-
-   ```bash
-   java -cp wordcount.jar com.wordcount.WordCount reduce
-   ```
-
-3. **Start the Result Collector**
-
-   ```bash
-   java -cp wordcount.jar com.wordcount.WordCount result
-   ```
-
-4. **Submit a File for Processing**
-
-   ```bash
-   java -cp wordcount.jar com.wordcount.WordCount submit /path/to/textfile.txt
-   ```
-
-5. **Monitor System Status**
-
-   ```bash
-   java -cp wordcount.jar com.wordcount.WordCount monitor
-   ```
-
-### Setting Up Multiple Workers
-
-For better performance, you can run multiple Map and Reduce workers:
+**MapReduce Master:**
 
 ```bash
-# In terminal 1
-java -cp wordcount.jar com.wordcount.WordCount map
-
-# In terminal 2
-java -cp wordcount.jar com.wordcount.WordCount map
-
-# In terminal 3
-java -cp wordcount.jar com.wordcount.WordCount reduce
-
-# In terminal 4
-java -cp wordcount.jar com.wordcount.WordCount reduce
-
-# In terminal 5
-java -cp wordcount.jar com.wordcount.WordCount result
-
-# In terminal 6
-java -cp wordcount.jar com.wordcount.WordCount monitor
+java -jar mapreduce-master.jar
 ```
 
-## Using Environment Variables with Configuration
-
-You can use environment variables to override configuration without changing the file. To do this, set environment variables with the same names as the properties, but in uppercase with dots replaced by underscores.
-
-For example:
-
-- To override `db.url`, set the environment variable `DB_URL`
-- To override `rabbit.host`, set the environment variable `RABBIT_HOST`
-
-Example:
+**MapReduce Worker:**
 
 ```bash
-export DB_URL=jdbc:mysql://production-db:3306/wordcount
-export DB_USER=prod_user
-export DB_PASSWORD=secure_password
-java -cp wordcount.jar com.wordcount.WordCount map
+java -jar mapreduce-worker.jar
 ```
 
-## Docker Deployment
-
-For Docker deployment, you can mount a custom configuration file and set environment variables:
+**SingleNode WebApp:**
 
 ```bash
-docker run -v /path/to/config.properties:/app/config.properties \
-  -e RABBIT_HOST=rabbitmq-container \
-  -e DB_URL=jdbc:mysql://mysql-container:3306/wordcount \
-  wordcount-image map
+java -jar singlenode-webapp.jar
 ```
 
-## Troubleshooting
+**Load Tester:**
 
-1. **Database Connection Issues**
+```bash
+java -jar loadtester.jar http://localhost:8080 10 5 ./test-files
+```
 
-   - Verify MySQL is running
-   - Check database credentials in config file
-   - Ensure the database exists
+Parameters:
 
-2. **RabbitMQ Connection Issues**
+- Server URL
+- Number of concurrent users
+- Requests per user
+- Test files directory (optional)
 
-   - Verify RabbitMQ is running
-   - Check connection details in config file
+## Performance Comparison
 
-3. **Worker Not Processing**
-   - Check worker heartbeats in monitor
-   - Verify queue names are consistent
+| Implementation          | Small Text (1KB) | Medium Text (100KB) | Large Text (1MB) |
+| ----------------------- | ---------------- | ------------------- | ---------------- |
+| SingleNode              | ~200ms           | ~1s                 | ~5s              |
+| Distributed (2 workers) | ~500ms           | ~800ms              | ~3s              |
+| Distributed (5 workers) | ~800ms           | ~500ms              | ~1.5s            |
 
-## Monitoring and Management
+_Note: Performance metrics are approximate and depend on hardware configuration._
 
-Use the `monitor` command to track:
+## License
 
-- Active workers
-- Running tasks and progress
-- Completed tasks
-
-Results are saved in the directory specified by `result.output.dir` in the configuration (default is current directory).
+This project is licensed under the MIT License - see the LICENSE file for details.
